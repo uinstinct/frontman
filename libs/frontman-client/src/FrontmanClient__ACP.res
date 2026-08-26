@@ -448,6 +448,23 @@ let cancelPrompt = (session: session): unit => {
   )
 }
 
+let editMessage = (
+  session: session,
+  ~messageId: string,
+  ~text: string,
+  ~_meta: option<JSON.t>=None,
+): promise<result<unit, string>> => {
+  Protocol.sendEditMessage(
+    ~channel=session.channel,
+    ~state=session.connection.state,
+    ~sessionId=session.sessionId,
+    ~messageId,
+    ~text,
+    ~_meta,
+    ~onMessage=session.connection.onMessage,
+  )
+}
+
 let retryTurn = (session: session, ~retriedErrorId: string): unit => {
   Protocol.sendRetryTurn(
     ~channel=session.channel,

@@ -35,6 +35,13 @@ type action =
   | CancelTurn
   | ExecutePendingPlan({id: Message.UserMessageId.t})
   | SwitchTask({taskId: string})
+  | EditMessage({
+      taskId: string,
+      messageId: string,
+      text: string,
+      onComplete: result<unit, string> => unit,
+    })
+  | ReloadTask({taskId: string})
   | DeleteTask({taskId: string})
   | ClearCurrentTask
   | UpdateTaskTitle({taskId: string, title: string})
@@ -42,6 +49,7 @@ type action =
       sendPrompt: Client__State__Types.sendPromptFn,
       cancelPrompt: Client__State__Types.cancelPromptFn,
       retryTurn: Client__State__Types.retryTurnFn,
+      editMessage: Client__State__Types.editMessageFn,
       loadTask: Client__State__Types.loadTaskFn,
       deleteSession: Client__State__Types.deleteSessionFn,
       apiBaseUrl: string,
@@ -106,6 +114,12 @@ type effect =
   | PollOpenAIDeviceAuthEffect({apiBaseUrl: string, deviceAuthId: string, userCode: string})
   | FetchUserProfileEffect({apiBaseUrl: string})
   | LoadTaskEffect({taskId: string})
+  | EditMessageEffect({
+      taskId: string,
+      messageId: string,
+      text: string,
+      onComplete: result<unit, string> => unit,
+    })
   | DeleteSessionEffect({taskId: string})
   | CheckForUpdateEffect({apiBaseUrl: string, installedVersion: string, npmPackage: string})
 
@@ -980,6 +994,40 @@ let handleEffect = (effect, state: state, dispatch) => {
     | NoAcpSession => ()
     }
 
+  | EditMessageEffect({taskId, messageId, text, onComplete}) =>
+    switch state.acpSession {
+    | AcpSessionActive({editMessage}) =>
+      // Q22: the rerun uses whatever model/agent is selected now, not the archived one.
+      let runtimeConfig = Client__RuntimeConfig.read()
+      let metadata =
+        Client__RuntimeConfig.toMeta(runtimeConfig)
+        ->JSON.Decode.object
+        ->Option.getOrThrow
+        ->Dict.copy
+      state.selectedModelValue->Option.forEach(modelValue =>
+        metadata->Dict.set("model", JSON.Encode.string(modelValue))
+      )
+      state.selectedAgentId->Option.forEach(agentId =>
+        metadata->Dict.set("agent", JSON.Encode.string(agentId))
+      )
+      editMessage(
+        ~messageId,
+        ~text,
+        ~_meta=Some(JSON.Encode.object(metadata)),
+        ~onComplete=result => {
+          switch result {
+          | Ok() => dispatch(ReloadTask({taskId: taskId}))
+          | Error(error) => Log.error(~ctx={"error": error}, "Failed to edit message")
+          }
+          onComplete(result)
+        },
+      )
+    | NoAcpSession =>
+      let error = "Cannot edit message: no active ACP session"
+      Log.error(error)
+      onComplete(Error(error))
+    }
+
   | LoadTaskEffect({taskId}) =>
     switch state.acpSession {
     | AcpSessionActive({loadTask}) =>
@@ -1133,6 +1181,26 @@ let next = (state: state, action) => {
       )
     }
 
+  | EditMessage({taskId, messageId, text, onComplete}) =>
+    state->StateReducer.update(
+      ~sideEffects=[EditMessageEffect({taskId, messageId, text, onComplete})],
+    )
+
+  // The server truncated the turn, so the local transcript is stale: drop it and replay.
+  | ReloadTask({taskId}) => {
+      let task = state.tasks->Dict.get(taskId)->Option.getOrThrow
+      let updatedTasks = state.tasks->Dict.copy
+      updatedTasks->Dict.set(taskId, Task.toUnloaded(task))
+      let (updatedState, taskEffects) =
+        {...state, tasks: updatedTasks}->Lens.delegateToTask(
+          ForTask(taskId),
+          TaskReducer.LoadStarted({previewUrl: getInitialUrl()}),
+        )
+      updatedState->StateReducer.update(
+        ~sideEffects=Array.concat([LoadTaskEffect({taskId: taskId})], taskEffects),
+      )
+    }
+
   | DeleteTask({taskId}) => {
       let updatedTasks = state.tasks->Dict.copy
       updatedTasks->Dict.delete(taskId)
@@ -1180,13 +1248,22 @@ let next = (state: state, action) => {
     | None => state->StateReducer.update
     }
 
-  | SetAcpSession({sendPrompt, cancelPrompt, retryTurn, loadTask, deleteSession, apiBaseUrl}) =>
+  | SetAcpSession({
+      sendPrompt,
+      cancelPrompt,
+      retryTurn,
+      editMessage,
+      loadTask,
+      deleteSession,
+      apiBaseUrl,
+    }) =>
     {
       ...state,
       acpSession: AcpSessionActive({
         sendPrompt,
         cancelPrompt,
         retryTurn,
+        editMessage,
         loadTask,
         deleteSession,
         apiBaseUrl,

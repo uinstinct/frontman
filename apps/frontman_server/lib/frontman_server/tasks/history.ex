@@ -14,7 +14,7 @@ defmodule FrontmanServer.Tasks.History do
   @terminal_types [:agent_completed, :agent_error, :agent_paused]
   @run_types @terminal_types ++ [:agent_response, :tool_call, :tool_result]
 
-  @enforce_keys ~w(rows ordered_rows users_by_id turns_by_number user_owners response_counts active_turn)a
+  @enforce_keys ~w(rows ordered_rows users_by_id turns_by_number user_owners response_counts active_turn superseded_turns)a
   defstruct @enforce_keys
 
   def new(rows) when is_list(rows) do
@@ -25,7 +25,8 @@ defmodule FrontmanServer.Tasks.History do
       turns_by_number: %{},
       user_owners: %{},
       response_counts: %{},
-      active_turn: nil
+      active_turn: nil,
+      superseded_turns: MapSet.new()
     }
 
     rows
@@ -33,6 +34,48 @@ defmodule FrontmanServer.Tasks.History do
     |> validate_user_links()
     |> project_ordered_rows()
   end
+
+  @doc """
+  Applies recorded message edits to an ordered row stream.
+
+  Edits are a projection, never a mutation: a `message_edited` row drops the turns it
+  superseded and rewrites the edited user message. Dropping a turn also drops its
+  `turn_started` row, which leaves that turn's user messages unowned so the next turn
+  re-accepts them. Rows are loaded through here exactly once, so prompt building and
+  `session/load` replay can never disagree about what was truncated.
+  """
+  def apply_edits(rows) when is_list(rows) do
+    case Enum.filter(rows, &(&1.type == :message_edited)) do
+      [] ->
+        rows
+
+      edits ->
+        superseded = edits |> Enum.flat_map(& &1.data.superseded_turns) |> MapSet.new()
+        overrides = Map.new(edits, &{&1.data.message_id, &1.data})
+
+        rows
+        |> Enum.reject(&MapSet.member?(superseded, &1.turn_number))
+        |> Enum.map(&apply_edit_override(&1, overrides))
+    end
+  end
+
+  defp apply_edit_override(
+         %InteractionSchema{type: :user_message, id: id, data: message} = row,
+         overrides
+       ) do
+    case Map.fetch(overrides, id) do
+      {:ok, edit} ->
+        %{
+          row
+          | data: %{message | messages: edit.messages, model: edit.model, agent_id: edit.agent_id}
+        }
+
+      :error ->
+        row
+    end
+  end
+
+  defp apply_edit_override(row, _overrides), do: row
 
   def attributed_rows!(%__MODULE__{ordered_rows: rows}) do
     agent_ids =
@@ -80,8 +123,33 @@ defmodule FrontmanServer.Tasks.History do
   def active_run_turn_number(%__MODULE__{active_turn: active_turn}), do: active_turn
   def active_turn_context(%__MODULE__{} = history), do: turn_context(history, history.active_turn)
 
-  def next_turn_number(%__MODULE__{turns_by_number: turns}) do
-    turns |> Map.keys() |> Enum.max(fn -> 0 end) |> Kernel.+(1)
+  def next_turn_number(%__MODULE__{turns_by_number: turns, superseded_turns: superseded}) do
+    turns
+    |> Map.keys()
+    |> Enum.concat(MapSet.to_list(superseded))
+    |> Enum.max(fn -> 0 end)
+    |> Kernel.+(1)
+  end
+
+  @doc """
+  Turns dropped when the given user message is edited: the turn owning it and every
+  turn at or after it, including turns already superseded by an earlier edit so each
+  edit row stays self-describing.
+  """
+  def turns_superseded_by_edit(%__MODULE__{} = history, message_id) when is_binary(message_id) do
+    case Map.fetch(history.user_owners, message_id) do
+      {:ok, %{turn_number: turn_number}} when is_integer(turn_number) ->
+        {:ok,
+         history.turns_by_number
+         |> Map.keys()
+         |> Enum.concat(MapSet.to_list(history.superseded_turns))
+         |> Enum.filter(&(&1 >= turn_number))
+         |> Enum.uniq()
+         |> Enum.sort()}
+
+      _unowned ->
+        {:error, :not_found}
+    end
   end
 
   def latest_turn_number(%__MODULE__{} = history), do: next_turn_number(history) - 1
@@ -157,6 +225,17 @@ defmodule FrontmanServer.Tasks.History do
          {:ok, _history}
        ),
        do: {:halt, {:error, {:invalid_turn_number, turn_number}}}
+
+  defp index_row(
+         %InteractionSchema{
+           type: :message_edited,
+           data: %Interaction.MessageEdited{superseded_turns: turns}
+         },
+         {:ok, history}
+       ) do
+    superseded = MapSet.union(history.superseded_turns, MapSet.new(turns))
+    {:cont, {:ok, %{history | superseded_turns: superseded}}}
+  end
 
   defp index_row(%InteractionSchema{}, {:ok, history}), do: {:cont, {:ok, history}}
 

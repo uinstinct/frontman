@@ -101,6 +101,34 @@ let sendPrompt = (
   )
 }
 
+let sendEditMessage = (
+  ~channel: Channel.t,
+  ~state: ref<Client.state>,
+  ~sessionId: string,
+  ~messageId: string,
+  ~text: string,
+  ~_meta: option<JSON.t>,
+  ~onMessage: option<(messageDirection, JSON.t) => unit>,
+): promise<result<unit, string>> => {
+  let entries = [
+    ("sessionId", JSON.Encode.string(sessionId)),
+    ("messageId", JSON.Encode.string(messageId)),
+    ("text", JSON.Encode.string(text)),
+  ]
+  let entries = switch _meta {
+  | Some(meta) => Array.concat(entries, [("_meta", meta)])
+  | None => entries
+  }
+  sendRequest(
+    ~channel,
+    ~state,
+    ~method="session/edit_message",
+    ~params=Some(JSON.Encode.object(Dict.fromArray(entries))),
+    ~parseResult=_ => Ok(),
+    ~onMessage,
+  )
+}
+
 let sendCancel = (
   ~channel: Channel.t,
   ~sessionId: string,

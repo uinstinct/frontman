@@ -21,6 +21,7 @@ defmodule FrontmanServer.Tasks.Interaction do
     __MODULE__.AgentError,
     __MODULE__.AgentPaused,
     __MODULE__.AgentRetry,
+    __MODULE__.MessageEdited,
     __MODULE__.ToolCall,
     __MODULE__.ToolResult,
     __MODULE__.DiscoveredProjectRule,
@@ -795,6 +796,39 @@ defmodule FrontmanServer.Tasks.Interaction do
     end
   end
 
+  defmodule MessageEdited do
+    @moduledoc """
+    Records a user editing an already-sent message.
+
+    Rows are never mutated, so an edit is stored as its own event: it names the
+    turns it supersedes (dropped when interactions are projected) and the text the
+    edited user message now reads as. The superseded turns' user messages become
+    unowned again, so the next turn re-runs them against the edited text.
+    """
+
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @fields [:message_id, :messages, :model, :agent_id, :superseded_turns]
+
+    embedded_schema do
+      field :message_id, :string
+      field :messages, {:array, :string}, default: []
+      field :model, :string
+      field :agent_id, :string
+      field :superseded_turns, {:array, :integer}, default: []
+      field :timestamp, :utc_datetime_usec
+    end
+
+    def changeset(%__MODULE__{} = message_edited, attrs) do
+      message_edited
+      |> Interaction.cast_timestamped(attrs, [:id, :timestamp | @fields])
+      |> validate_required(@fields)
+      |> validate_length(:messages, min: 1)
+      |> validate_length(:superseded_turns, min: 1)
+    end
+  end
+
   defmodule AgentPaused do
     @moduledoc """
     Recorded when the agent loop is paused due to a tool timeout with
@@ -1131,6 +1165,7 @@ defmodule FrontmanServer.Tasks.Interaction do
   defp to_swarm_message(%AgentError{}), do: []
   defp to_swarm_message(%AgentPaused{}), do: []
   defp to_swarm_message(%AgentRetry{}), do: []
+  defp to_swarm_message(%MessageEdited{}), do: []
   defp to_swarm_message(%DiscoveredProjectRule{}), do: []
   defp to_swarm_message(%DiscoveredProjectStructure{}), do: []
 

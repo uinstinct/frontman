@@ -25,6 +25,7 @@ let _makeState = (~selectedModelValue=None, ~pendingProviderAutoSelect=None): Ty
       sendPrompt: _dummySendPrompt,
       cancelPrompt: _dummyCancelPrompt,
       retryTurn: _dummyRetryTurn,
+      editMessage: (~messageId as _, ~text as _, ~_meta as _, ~onComplete as _) => (),
       loadTask: _dummyLoadTask,
       deleteSession: _dummyDeleteSession,
       apiBaseUrl: _apiBaseUrl,

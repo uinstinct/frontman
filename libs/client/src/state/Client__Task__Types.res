@@ -195,6 +195,15 @@ module Task = {
     | New(_) | Unloaded(_) | Loading(_) => false
     }
 
+  // Drops everything the server owns so the transcript can be replayed from scratch.
+  let toUnloaded = (task: t): t =>
+    switch task {
+    | Unloaded(_) => task
+    | Loading({id, title, createdAt, updatedAt}) | Loaded({id, title, createdAt, updatedAt}) =>
+      Unloaded({id, title, createdAt, updatedAt})
+    | New(_) => failwith("[Task] toUnloaded: a new task has nothing to reload")
+    }
+
   let stateToString = (task: t): string =>
     switch task {
     | New(_) => "New"

@@ -86,6 +86,9 @@ defmodule FrontmanServerWeb.TaskChannel do
       {:ok, {:request, id, @acp_method_session_load, params}} ->
         handle_session_load(id, params, socket)
 
+      {:ok, {:request, id, "session/edit_message", params}} ->
+        handle_edit_message(id, params, socket)
+
       {:ok, {:request, id, method, _params}} ->
         reply_acp_error(
           socket,
@@ -599,6 +602,50 @@ defmodule FrontmanServerWeb.TaskChannel do
   defp handle_session_load(id, _params, socket) do
     push_acp_error(socket, id, JsonRpc.error_invalid_params(), "Session does not match channel")
   end
+
+  defp handle_edit_message(
+         id,
+         %{"sessionId" => task_id, "messageId" => message_id, "text" => text, "_meta" => meta},
+         socket
+       )
+       when task_id == socket.assigns.task_id and is_map(meta) do
+    scope = socket.assigns.scope
+
+    case Providers.model_from_client_params(meta["model"]) do
+      {:ok, model} ->
+        with {:ok, agent_id} <-
+               Agents.resolve_agent_id(scope, meta["agent"] || Agents.default_agent_id(scope)),
+             :ok <- Tasks.edit_message(scope, task_id, message_id, text, model, agent_id) do
+          Logger.info("Message edit accepted for task #{task_id}")
+          reply_acp_ok(socket, id)
+        else
+          {:error, :run_active} ->
+            reply_invalid_params(socket, id, "Cannot edit a message while the agent is running")
+
+          {:error, :empty_message} ->
+            reply_invalid_params(socket, id, "Edited message cannot be empty")
+
+          {:error, :not_found} ->
+            reply_invalid_params(socket, id, "Message not found")
+
+          {:error, reason} when reason in [:missing_agent, :unknown_agent] ->
+            reply_invalid_params(socket, id, "Unknown agent")
+
+          {:error, reason} ->
+            Logger.error("Failed to edit message: #{inspect(reason)}")
+            reply_acp_error(socket, id, -32_000, inspect(reason))
+        end
+
+      :error ->
+        reply_invalid_params(socket, id, "Model is required")
+    end
+  end
+
+  defp handle_edit_message(id, _params, socket),
+    do: reply_invalid_params(socket, id, "Invalid session/edit_message params")
+
+  defp reply_acp_ok(socket, id),
+    do: {:reply, {:ok, %{@acp_message => JsonRpc.success_response(id, %{})}}, socket}
 
   defp process_prompt(id, %{"prompt" => content_blocks, "_meta" => meta}, socket)
        when is_map(meta) do

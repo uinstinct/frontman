@@ -17,10 +17,11 @@ let effectKinds = effects =>
     | Reducer.SendPromptEffect(_) => #sendPrompt
     | Reducer.CancelPromptEffect(_) => #cancelPrompt
     | Reducer.RetryTurnEffect(_) => #retryTurn
+    | Reducer.EditMessageEffect(_) => #editMessage
     | Reducer.FetchSessionsEffect(_) => #fetchSessions
     | Reducer.LoadTaskEffect(_) => #loadTask
     | Reducer.DeleteSessionEffect(_) => #deleteSession
-    | Reducer.NotifyDeleteSessionRejected(_) => #deleteRejected
+    | Reducer.NotifyRejected(_) => #rejected
     | Reducer.CleanupSessionEffect(_) => #cleanupSession
     }
   )

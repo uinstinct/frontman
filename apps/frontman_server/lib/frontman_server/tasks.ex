@@ -27,6 +27,7 @@ defmodule FrontmanServer.Tasks do
     Interaction.AgentError,
     Interaction.AgentPaused,
     Interaction.AgentRetry,
+    Interaction.MessageEdited,
     Interaction.ToolCall,
     Interaction.ToolResult,
     Interaction.DiscoveredProjectRule,
@@ -158,6 +159,7 @@ defmodule FrontmanServer.Tasks do
     InteractionSchema.for_task(task_id)
     |> InteractionSchema.ordered()
     |> Repo.all()
+    |> History.apply_edits()
   end
 
   @doc """
@@ -785,6 +787,48 @@ defmodule FrontmanServer.Tasks do
 
           {:ok, turn_number, tool_calls}
       end
+    end
+  end
+
+  @doc """
+  Records an edit of an already-sent user message.
+
+  Supersedes the turn owning the message and every turn after it. The surviving user
+  messages of that turn go back to pending, so the next turn re-runs them with the
+  edited text. Execution is deliberately not started here: the client reloads its
+  transcript first, and `session/load` wakes the runner once the replay has drained.
+  """
+  def edit_message(%Scope{} = scope, task_id, message_id, text, model, agent_id)
+      when is_binary(message_id) and is_binary(text) do
+    with :ok <- validate_edit_text(text),
+         {:ok, schema} <- get_task_by_id(scope, task_id),
+         rows = load_interaction_rows(task_id),
+         {:ok, history} <- History.new(rows),
+         :ok <- ensure_no_active_run(history),
+         {:ok, superseded_turns} <- History.turns_superseded_by_edit(history, message_id),
+         attrs = %{
+           message_id: message_id,
+           messages: [text],
+           model: model,
+           agent_id: agent_id,
+           superseded_turns: superseded_turns
+         },
+         {:ok, _edit} <- record_interaction(schema, :message_edited, attrs, nil) do
+      :ok
+    end
+  end
+
+  defp validate_edit_text(text) do
+    case String.trim(text) do
+      "" -> {:error, :empty_message}
+      _text -> :ok
+    end
+  end
+
+  defp ensure_no_active_run(history) do
+    case History.active_run_turn_number(history) do
+      nil -> :ok
+      _turn_number -> {:error, :run_active}
     end
   end
 

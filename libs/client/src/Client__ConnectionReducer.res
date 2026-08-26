@@ -116,6 +116,12 @@ type action =
     })
   | CancelPrompt
   | RetryTurn({retriedErrorId: string})
+  | EditMessage({
+      messageId: string,
+      text: string,
+      _meta: option<JSON.t>,
+      onComplete: result<unit, string> => unit,
+    })
   | LoadTask(loadTaskRequest)
   | DeleteSession({taskId: string, onComplete: result<unit, string> => unit})
   | ClearSession
@@ -147,6 +153,13 @@ type effect =
     })
   | CancelPromptEffect({session: ACP.session})
   | RetryTurnEffect({session: ACP.session, retriedErrorId: string})
+  | EditMessageEffect({
+      session: ACP.session,
+      messageId: string,
+      text: string,
+      _meta: option<JSON.t>,
+      onComplete: result<unit, string> => unit,
+    })
   | FetchSessionsEffect(ACP.connection)
   | LoadTaskEffect({connection: ACP.connection, mcpServer: MCPServer.t, request: loadTaskRequest})
   | DeleteSessionEffect({
@@ -154,7 +167,7 @@ type effect =
       taskId: string,
       onComplete: result<unit, string> => unit,
     })
-  | NotifyDeleteSessionRejected({onComplete: result<unit, string> => unit, reason: string})
+  | NotifyRejected({onComplete: result<unit, string> => unit, reason: string})
   | CleanupSessionEffect({session: ACP.session})
 
 let initialState: state = {
@@ -423,6 +436,16 @@ let reduce = (state: state, action: action): (state, array<effect>) => {
 
   | (_, RetryTurn(_)) => (state, [LogError("Cannot retry turn: no active session")])
 
+  | ({session: SessionActive(session)}, EditMessage({messageId, text, _meta, onComplete})) => (
+      state,
+      [EditMessageEffect({session, messageId, text, _meta, onComplete})],
+    )
+
+  | (_, EditMessage({onComplete, _})) => (
+      state,
+      [NotifyRejected({onComplete, reason: "No active session"})],
+    )
+
   | ({session: NoSession | SessionCreating(_) | SessionError(_)}, SendPrompt(_)) => (
       state,
       [LogError("Cannot send prompt: no active session")],
@@ -462,7 +485,7 @@ let reduce = (state: state, action: action): (state, array<effect>) => {
   | (_, DeleteSession({onComplete, _})) => (
       state,
       [
-        NotifyDeleteSessionRejected({onComplete, reason: "Not connected"}),
+        NotifyRejected({onComplete, reason: "Not connected"}),
         LogError("Cannot delete session: not connected"),
       ],
     )
@@ -565,7 +588,7 @@ let handleEffect = (effect: effect, state: state, dispatch: action => unit) => {
   | LogError(msg) => Log.error(msg)
   | LogInfo(msg) => Log.info(msg)
   | TrackRelay(outcome) => Client__Heap.trackRelayConnection(outcome)
-  | NotifyDeleteSessionRejected({onComplete, reason}) => onComplete(Error(reason))
+  | NotifyRejected({onComplete, reason}) => onComplete(Error(reason))
   | ConnectACP({config, signal}) =>
     let connect = async () => {
       let result = await ACP.connect(config, ~signal)
@@ -674,6 +697,10 @@ let handleEffect = (effect: effect, state: state, dispatch: action => unit) => {
 
   | RetryTurnEffect({session, retriedErrorId}) => ACP.retryTurn(session, ~retriedErrorId)
 
+  | EditMessageEffect({session, messageId, text, _meta, onComplete}) =>
+    let edit = async () => onComplete(await ACP.editMessage(session, ~messageId, ~text, ~_meta))
+    edit()->ignore
+
   | FetchSessionsEffect(conn) =>
     Client__State.Actions.sessionsLoadStarted()
     let fetch = async () => {
@@ -737,7 +764,7 @@ let handleEffect = (effect: effect, state: state, dispatch: action => unit) => {
 
     switch state.session {
     | SessionActive(oldSession) =>
-      switch oldSession.sessionId == taskId {
+      switch oldSession.sessionId == taskId && !needsHistory {
       | true => onComplete(Ok())
       | false =>
         cleanupSession(oldSession)

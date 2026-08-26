@@ -68,6 +68,68 @@ defmodule FrontmanServer.Tasks.HistoryTest do
     assert {:error, {:inactive_run, :agent_response, 1, nil}} = History.new(rows)
   end
 
+  test "edits drop superseded turns, rewrite the edited message, and unown its user rows" do
+    rows = [
+      user_row("kept", "model-a"),
+      turn_row("turn-one", 1, ["kept"]),
+      response_row(1),
+      user_row("edited", "model-a"),
+      turn_row("turn-two", 2, ["edited"]),
+      response_row(2),
+      edit_row("edited", ["rewritten"], [2])
+    ]
+
+    projected = History.apply_edits(rows)
+
+    assert {:ok, history} = History.new(projected)
+
+    # Turn two is gone, so its response went with it and its user row is pending again.
+    assert Enum.filter(projected, &(&1.turn_number == 2)) == []
+    assert [%InteractionSchema{id: "edited"}] = History.pending_accepted_messages(history)
+
+    assert %InteractionSchema{data: %Interaction.UserMessage{} = edited} =
+             Enum.find(projected, &(&1.id == "edited"))
+
+    assert edited.messages == ["rewritten"]
+    assert edited.model == "model-b"
+    assert edited.agent_id == "other-executor"
+
+    # The surviving turn is untouched, and turn two's number is never handed out again.
+    assert {:ok, "model-a"} = History.turn_model(history, 1)
+    assert 3 = History.next_turn_number(history)
+
+    # A second edit carries the already-dead turn forward, so each edit row stands alone.
+    assert {:ok, [1, 2]} = History.turns_superseded_by_edit(history, "kept")
+  end
+
+  test "editing a message reports its own turn and every turn after it" do
+    rows = [
+      user_row("first", "model-a"),
+      turn_row("turn-one", 1, ["first"]),
+      user_row("second", "model-a"),
+      turn_row("turn-two", 2, ["second"])
+    ]
+
+    assert {:ok, history} = History.new(rows)
+    assert {:ok, [1, 2]} = History.turns_superseded_by_edit(history, "first")
+    assert {:ok, [2]} = History.turns_superseded_by_edit(history, "second")
+    assert {:error, :not_found} = History.turns_superseded_by_edit(history, "unknown")
+  end
+
+  defp edit_row(message_id, messages, superseded_turns) do
+    interaction = %Interaction.MessageEdited{
+      id: Ecto.UUID.generate(),
+      message_id: message_id,
+      messages: messages,
+      model: "model-b",
+      agent_id: "other-executor",
+      superseded_turns: superseded_turns,
+      timestamp: Interaction.now()
+    }
+
+    interaction_row(interaction, nil)
+  end
+
   defp user_row(id, model) do
     interaction = %{user_msg(id) | id: "embedded-#{id}", agent_id: "executor-id", model: model}
     %{interaction_row(interaction, nil) | id: id}

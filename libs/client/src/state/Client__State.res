@@ -103,9 +103,7 @@ module Actions = {
     )
 
   let highlightAnnotation = (~annotationId, ~selector) =>
-    Client__State__Store.dispatch(
-      HighlightAnnotation({annotationId: annotationId, selector: selector}),
-    )
+    Client__State__Store.dispatch(HighlightAnnotation({annotationId, selector}))
 
   let closeAnnotationPopup = () =>
     Client__State__Store.dispatch(
@@ -132,12 +130,21 @@ module Actions = {
     ~sendPrompt,
     ~cancelPrompt,
     ~retryTurn,
+    ~editMessage,
     ~loadTask,
     ~deleteSession,
     ~apiBaseUrl,
   ) =>
     Client__State__Store.dispatch(
-      SetAcpSession({sendPrompt, cancelPrompt, retryTurn, loadTask, deleteSession, apiBaseUrl}),
+      SetAcpSession({
+        sendPrompt,
+        cancelPrompt,
+        retryTurn,
+        editMessage,
+        loadTask,
+        deleteSession,
+        apiBaseUrl,
+      }),
     )
 
   let clearAcpSession = () => Client__State__Store.dispatch(ClearAcpSession)
@@ -183,6 +190,13 @@ module Actions = {
     Client__State__Store.dispatch(
       TaskAction({target: ForTask(taskId), action: RetryTurn({retriedErrorId: retriedErrorId})}),
     )
+
+  let editMessage = (
+    ~taskId: string,
+    ~messageId: string,
+    ~text: string,
+    ~onComplete: result<unit, string> => unit,
+  ) => Client__State__Store.dispatch(EditMessage({taskId, messageId, text, onComplete}))
 
   let planReceived = (~taskId: string, ~entries) =>
     Client__State__Store.dispatch(

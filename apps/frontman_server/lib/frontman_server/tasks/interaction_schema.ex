@@ -28,6 +28,7 @@ defmodule FrontmanServer.Tasks.InteractionSchema do
     agent_error: Interaction.AgentError,
     agent_paused: Interaction.AgentPaused,
     agent_retry: Interaction.AgentRetry,
+    message_edited: Interaction.MessageEdited,
     tool_call: Interaction.ToolCall,
     tool_result: Interaction.ToolResult,
     discovered_project_rule: Interaction.DiscoveredProjectRule,
@@ -37,7 +38,7 @@ defmodule FrontmanServer.Tasks.InteractionSchema do
   @tool_result_unique_constraint :interactions_tool_result_turn_uniqueness
 
   @type_values Keyword.keys(@types)
-  @task_scoped_types [:discovered_project_rule, :discovered_project_structure]
+  @task_scoped_types [:discovered_project_rule, :discovered_project_structure, :message_edited]
 
   @primary_key {:id, Ecto.UUID, autogenerate: false}
   @foreign_key_type :binary_id

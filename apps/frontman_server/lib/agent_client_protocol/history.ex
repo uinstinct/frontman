@@ -17,6 +17,7 @@ defmodule AgentClientProtocol.History do
     :turn_started,
     :agent_completed,
     :agent_retry,
+    :message_edited,
     :discovered_project_rule,
     :discovered_project_structure
   ]

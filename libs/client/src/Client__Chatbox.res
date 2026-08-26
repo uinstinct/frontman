@@ -276,8 +276,28 @@ let make = (~onConfigureProvider: unit => unit) => {
     switch item {
     | UserMsg({id, content, annotations, agentId}) =>
       let messageId = `user-${id}`
+      let removedMessageCount = switch messages->Array.findIndex(msg => Message.getId(msg) == id) {
+      | -1 => 0
+      | index => Array.length(messages) - index - 1
+      }
+      // Editing truncates a turn, so it stays closed while the agent owns the transcript.
+      let onEdit = switch (isAgentRunning, currentTaskId) {
+      | (false, Some(taskId)) =>
+        Some(
+          (text, onComplete) =>
+            Client__State.Actions.editMessage(~taskId, ~messageId=id, ~text, ~onComplete),
+        )
+      | (true, _) | (_, None) => None
+      }
       <UserMessage
-        key={messageId} content annotations messageId agent={agentForId(agentId)} isNew={isLastItem}
+        key={messageId}
+        content
+        annotations
+        messageId
+        agent={agentForId(agentId)}
+        isNew={isLastItem}
+        ?onEdit
+        removedMessageCount
       />
 
     | AssistantMsg(Streaming({id, textBuffer, agentId, _})) =>
